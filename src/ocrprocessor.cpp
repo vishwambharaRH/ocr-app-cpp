@@ -133,7 +133,7 @@ QString OcrProcessor::renderPageToTempPNG(int pageIndex) {
     renderer.render(&image, pdfDoc_, pageIndex);
 #else
     // Fallback: use QPdfDocument::render (Qt 6.5+)
-    pdfDoc_->render(&image, pageIndex, image.size() );
+    QImage image = pdfDoc_->render(&image, pageIndex, image.size() );
 #endif
 
     QTemporaryDir tmp;
