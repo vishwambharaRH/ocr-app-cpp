@@ -13,5 +13,5 @@ Also Python bindings will be provided for easy integration with existing Python 
 - Regular updates will be provided in the repository.
 
 > [!NOTE]
-> I do not know C++, hence any changes in the code that I can make
-> would be very limited. Contributions from C++ developers are welcome!
+> I do not know proper C++ (yet), hence any changes in the code that I can make
+> would be very limited and rudimentary. Contributions from C++ developers are welcome!
