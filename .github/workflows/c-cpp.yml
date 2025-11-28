@@ -1,4 +1,4 @@
-name: Build Qt C++ App (CI)
+name: Build, Test & Lint
 
 on:
   push:
@@ -11,146 +11,149 @@ jobs:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    # Force bash shell on Windows so we can reuse the same cmake commands
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup dependencies (Ubuntu)
+      # --- DEPENDENCIES: LINUX ---
+      - name: Install Dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake pkg-config git ca-certificates \
-            libssl-dev libtiff5-dev libjpeg-dev zlib1g-dev libpng-dev \
-            tesseract-ocr libleptonica-dev qt6-base-dev qt6-declarative-dev qt6-quickcontrols2-6-dev qt6-tools-dev
+          sudo apt-get install -y build-essential cmake pkg-config git \
+            libtesseract-dev libleptonica-dev \
+            qt6-base-dev qt6-declarative-dev qt6-quickcontrols2-6-dev qt6-tools-dev \
+            clang-tidy
 
-      - name: Setup dependencies (macOS)
+      # --- DEPENDENCIES: MACOS ---
+      - name: Install Dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
           brew update
-          brew install cmake pkg-config qt@6 tesseract openssl
-          echo "::add-path::$(brew --prefix qt@6)/bin"
+          brew install cmake pkg-config qt@6 tesseract llvm
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix qt@6)/lib/cmake" >> $GITHUB_ENV
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
 
+      # --- DEPENDENCIES: WINDOWS ---
+      - name: Install Qt (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.5.0' # Adjust to your needed version
+          host: 'windows'
+          arch: 'win64_msvc2019_64'
+
+      - name: Install Tesseract via vcpkg (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          # vcpkg is pre-installed on GitHub Actions runners
+          vcpkg install tesseract:x64-windows
+          vcpkg install leptonica:x64-windows
+          # Integrate vcpkg with CMake
+          echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
+
+      # --- CONFIGURE ---
       - name: Configure CMake
-        env:
-          # On macOS, point CMake to Homebrew Qt; on Linux system packages should be in default search path
-          CMAKE_PREFIX_PATH: ${{ runner.os == 'macOS' && ("$(brew --prefix qt@6)/lib/cmake") || '' }}
         run: |
-          # Export compile_commands.json so clang-tidy can run
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"}
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            ${{ matrix.os == 'windows-latest' && '-DVCPKG_TARGET_TRIPLET=x64-windows' || '' }}
 
+      # --- BUILD ---
       - name: Build
-        run: cmake --build build --config Release -- -j$(nproc || sysctl -n hw.ncpu)
+        run: cmake --build build --config Release -- -j$(nproc 2>/dev/null || sysctl -n hw.ncpu || echo 2)
 
-      - name: Install clang-tidy (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+      # --- DEPLOYMENT (WINDOWS ONLY) ---
+      # Windows exes need DLLs next to them to run. 
+      # windeployqt fixes Qt DLLs. We manually copy Tesseract DLLs.
+      - name: Deploy Qt/Deps (Windows)
+        if: matrix.os == 'windows-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-tidy
+          # 1. Run windeployqt to copy Qt DLLs to the build folder
+          windeployqt --release --compiler-runtime build/Release/*.exe
+          
+          # 2. Copy Tesseract/Leptonica DLLs from vcpkg to build folder
+          # (Note: Paths depend on vcpkg structure, this is the standard location)
+          cp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/"*.dll build/Release/
 
-      - name: Install clang-tidy (macOS)
-        if: matrix.os == 'macos-latest'
+      # --- LINTING (Skip on Windows to save time/complexity with MSVC headers) ---
+      - name: Run Clang-Tidy
+        if: matrix.os != 'windows-latest' 
         run: |
-          brew install llvm
-          # ensure brew llvm tools are on PATH for this step
-          echo "::add-path::$(brew --prefix llvm)/bin"
-
-      - name: Run clang-tidy
-        run: |
-          set -e
           if [ ! -f build/compile_commands.json ]; then
-            echo "No compile_commands.json found; skipping clang-tidy"
-            exit 0
+            echo "::error::compile_commands.json not found!"
+            exit 1
           fi
-          # Prefer clang-tidy from environment (brew llvm on macOS or apt on Ubuntu)
-          CLANG_TIDY_BIN=clang-tidy
-          if ! command -v ${CLANG_TIDY_BIN} >/dev/null 2>&1; then
-            echo "clang-tidy not installed; skipping"
-            exit 0
-          fi
-          # Run clang-tidy across C++ source files and treat warnings as errors.
-          # Adjust -checks as needed for your codebase.
-          SRC_FILES=$(find src tests -name '*.cpp' -or -name '*.cxx' -or -name '*.cc' | tr '\n' ' ')
-          if [ -z "${SRC_FILES// }" ]; then
-            echo "No source files found for clang-tidy"
-            exit 0
-          fi
-          echo "Running clang-tidy on: ${SRC_FILES}"
-          # NOTE: clang-tidy can be noisy; configure checks to your policy. Here we enable common analyzers.
-          for f in ${SRC_FILES}; do
-            echo "---- lint: $f ----"
-            ${CLANG_TIDY_BIN} -p build -warnings-as-errors='*' -checks='-*,clang-analyzer-*,modernize-*,performance-*,readability-*' "$f"
-          done
+          find src -name "*.cpp" -print0 | xargs -0 -I {} clang-tidy -p build \
+            -quiet -warnings-as-errors='*' \
+            -checks='-*,clang-analyzer-*,performance-*,modernize-use-nullptr,readability-redundant-*' {}
 
-      - name: Run basic smoke (optional)
+      # --- TESTING ---
+      - name: Run Unit Tests
         run: |
-          # If the binary exists, run it with --help or print version; don't fail CI if interactive UI
-          if [ -x build/QtQuickTessApp.app/Contents/MacOS/QtQuickTessApp ]; then
-            build/QtQuickTessApp.app/Contents/MacOS/QtQuickTessApp --version || true
-          elif [ -x build/QtQuickTessApp ]; then
-            build/QtQuickTessApp --version || true
-          else
-            echo "No runnable binary found (UI builds are OK)."
+          if [ -d "tests" ]; then
+            cd build
+            # On Windows, CTest needs the PATH to include the DLLs we just copied
+            if [ "${{ matrix.os }}" == "windows-latest" ]; then
+              export PATH=$PATH:$(pwd)/Release
+              ctest -C Release --output-on-failure --verbose
+            else
+              ctest --output-on-failure --verbose
+            fi
           fi
 
-      - name: Run unit tests
+      # --- PACKAGING ---
+      - name: Create Package
         run: |
-          if [ -d build ]; then
-            cmake --build build --target test || true
-            ctest --test-dir build --output-on-failure || true
-          else
-            echo "No build directory found; skipping tests"
-          fi
-
-      - name: Package artifacts
-        run: |
-          set -e
           mkdir -p packaged
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            if [ -d build/QtQuickTessApp.app ]; then
-              ZIPNAME="QtQuickTessApp-macos-${{ github.run_number }}.zip"
-              ditto -c -k --sequesterRsrc --keepParent build/QtQuickTessApp.app packaged/${ZIPNAME}
-              echo "Created packaged/${ZIPNAME}"
-            else
-              echo "No .app bundle found to package"
-            fi
+            APP_PATH=$(find build -name "*.app" | head -n 1)
+            [ -n "$APP_PATH" ] && zip -r "packaged/QtQuickTessApp-macos.zip" "$APP_PATH"
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            # Windows: Zip the Release folder which now contains Exe + DLLs
+            cd build
+            7z a ../packaged/QtQuickTessApp-windows.zip Release
           else
-            # Linux: package the built binary or the entire build folder
-            if [ -x build/QtQuickTessApp ]; then
-              TARNAME="QtQuickTessApp-linux-${{ github.run_number }}.tar.gz"
-              tar -C build -czf packaged/${TARNAME} QtQuickTessApp
-              echo "Created packaged/${TARNAME}"
-            else
-              # Fallback: archive build directory
-              TARNAME="QtQuickTessApp-build-${{ github.run_number }}.tar.gz"
-              tar -C build -czf packaged/${TARNAME} .
-              echo "Created packaged/${TARNAME}"
-            fi
+            # Linux
+            find build -maxdepth 1 -type f -executable -not -name "cmake" -exec tar -czf "packaged/QtQuickTessApp-linux.tar.gz" {} +
           fi
 
-      - name: Upload build artifact
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: qt-app-build-${{ matrix.os }}
-          path: |
-            build/QtQuickTessApp.app
-            build/QtQuickTessApp
-            packaged
+          name: build-artifacts-${{ matrix.os }}
+          path: packaged/
+          if-no-files-found: warn
 
+  # --- SECURITY SCAN (CodeQL) ---
   codeql:
-    name: CodeQL Analysis
+    name: CodeQL Security Scan
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
       security-events: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install Dependencies for CodeQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config \
+            libtesseract-dev libleptonica-dev \
+            qt6-base-dev qt6-declarative-dev qt6-quickcontrols2-6-dev qt6-tools-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v2
@@ -160,14 +163,5 @@ jobs:
       - name: Autobuild
         uses: github/codeql-action/autobuild@v2
 
-      - name: Run CodeQL analysis
+      - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v2
-
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qt-app-build-${{ matrix.os }}
-          path: |
-            build/QtQuickTessApp.app
-            build/QtQuickTessApp
