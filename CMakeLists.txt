@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(QtQuickTessApp VERSION 1.0 LANGUAGES CXX)
+project(OCRLLMProcessor VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -109,14 +109,21 @@ set(HEADERS
 list(APPEND SOURCES src/utils.cpp)
 list(APPEND HEADERS src/utils.h)
 
+# macOS bundle icon
+set(ICON_FILE ${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.icns)
+if(EXISTS ${ICON_FILE})
+    set_source_files_properties(${ICON_FILE} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    list(APPEND SOURCES ${ICON_FILE})
+endif()
+
 # Create executable
-qt_add_executable(QtQuickTessApp
+qt_add_executable(OCRLLMProcessor
     ${SOURCES}
     ${HEADERS}
 )
 
 # Add QML module
-qt6_add_qml_module(QtQuickTessApp
+qt6_add_qml_module(OCRLLMProcessor
     URI App
     VERSION 1.0
     QML_FILES
@@ -124,7 +131,7 @@ qt6_add_qml_module(QtQuickTessApp
 )
 
 # Link libraries
-target_link_libraries(QtQuickTessApp PRIVATE
+target_link_libraries(OCRLLMProcessor PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Quick
@@ -159,36 +166,37 @@ gtest_discover_tests(test_utils)
 
 # Platform-specific linking
 if(UNIX AND NOT APPLE)
-    target_link_libraries(QtQuickTessApp PRIVATE pthread)
+    target_link_libraries(OCRLLMProcessor PRIVATE pthread)
 endif()
 
 # Add compile definition for TESSDATA_DIR if provided
 if(TESSDATA_DIR)
-    target_compile_definitions(QtQuickTessApp PRIVATE
+    target_compile_definitions(OCRLLMProcessor PRIVATE
         APP_TESSDATA_DIR=\"${TESSDATA_DIR}\"
     )
     message(STATUS "TESSDATA_DIR set to: ${TESSDATA_DIR}")
 endif()
 
 # Installation rules
-install(TARGETS QtQuickTessApp
+install(TARGETS OCRLLMProcessor
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
 )
 
 # macOS bundle configuration
 if(APPLE)
-    set_target_properties(QtQuickTessApp PROPERTIES
+    set_target_properties(OCRLLMProcessor PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_GUI_IDENTIFIER com.ocrapp.QtQuickTessApp
+        MACOSX_BUNDLE_GUI_IDENTIFIER com.ocrapp.OCRLLMProcessor
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
-        MACOSX_BUNDLE_BUNDLE_NAME "OCR-LLM Processor"
+        MACOSX_BUNDLE_BUNDLE_NAME "OCRLLMProcessor"
+        MACOSX_BUNDLE_ICON_FILE "app.icns"
     )
     
     # Only set Info.plist if the file exists
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in)
-        set_target_properties(QtQuickTessApp PROPERTIES
+        set_target_properties(OCRLLMProcessor PROPERTIES
             MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in
         )
     endif()
