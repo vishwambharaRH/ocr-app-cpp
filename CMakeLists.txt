@@ -109,6 +109,13 @@ set(HEADERS
 list(APPEND SOURCES src/utils.cpp)
 list(APPEND HEADERS src/utils.h)
 
+# macOS bundle icon
+set(ICON_FILE ${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.icns)
+if(EXISTS ${ICON_FILE})
+    set_source_files_properties(${ICON_FILE} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    list(APPEND SOURCES ${ICON_FILE})
+endif()
+
 # Create executable
 qt_add_executable(QtQuickTessApp
     ${SOURCES}
@@ -183,7 +190,8 @@ if(APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER com.ocrapp.QtQuickTessApp
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
-        MACOSX_BUNDLE_BUNDLE_NAME "OCR-LLM Processor"
+        MACOSX_BUNDLE_BUNDLE_NAME "OCR+LLM Processor"
+        MACOSX_BUNDLE_ICON_FILE "app.icns"
     )
     
     # Only set Info.plist if the file exists
