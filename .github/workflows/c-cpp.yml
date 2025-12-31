@@ -30,7 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config git \
             libtesseract-dev libleptonica-dev libssl-dev \
-            qt6-base-dev qt6-declarative-dev qt6-tools-dev \
+            qt6-base-dev qt6-declarative-dev qt6-pdf-dev qt6-tools-dev \
             clang-tidy
 
       # --- DEPENDENCIES: MACOS ---
@@ -89,9 +89,9 @@ jobs:
             cp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/"*.dll build/Release/ 2>/dev/null || true
           fi
 
-      # --- LINTING (Skip on Windows) ---
+      # --- LINTING (Ubuntu only; macOS clang-tidy has header path issues) ---
       - name: Run Clang-Tidy
-        if: matrix.os != 'windows-latest' 
+        if: matrix.os == 'ubuntu-latest'
         run: |
           if [ ! -f build/compile_commands.json ]; then
             echo "::error::compile_commands.json not found!"
