@@ -166,7 +166,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config \
             libtesseract-dev libleptonica-dev \
-            qt6-base-dev qt6-declarative-dev qt6-quickcontrols2-6-dev qt6-tools-dev
+            qt6-base-dev qt6-declarative-dev qt6-tools-dev qt6-pdf-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v2
