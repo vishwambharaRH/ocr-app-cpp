@@ -26,27 +26,26 @@
 
 // -----------------------------------------------------------------------------
 // Worker object: performs heavy OCR/LLM work on a background thread.
-// This keeps the UI-facing OcrProcessor in the main (GUI) thread so QML
-// bindings remain valid and signals are delivered reliably.
 class OcrWorker : public QObject {
     Q_OBJECT
 public:
-    // Copy necessary configuration into the worker
         OcrWorker(const QString &pdfPath,
-              const QString &outputPath,
-              const QString &tessPath,
-              const QString &ocrEngine,
-              const QString &langKey,
-              const QString &apiKey,
-              const QString &oauthToken,
-              const QString &googleServiceAccountPath,
-              const QString &prompt,
-              const QMap<QString, QPair<QString, QString>> &langMap,
-              std::atomic<bool> *stopFlag)
-          : pdfPath_(pdfPath), outputPath_(outputPath), tessPath_(tessPath),
-            ocrEngine_(ocrEngine), langKey_(langKey), apiKey_(apiKey),
-            oauthToken_(oauthToken), googleServiceAccountPath_(googleServiceAccountPath), prompt_(prompt),
-            langMap_(langMap), stopFlag_(stopFlag) {}
+                            const QString &outputPath,
+                            const QString &tessPath,
+                            const QString &ocrEngine,
+                            const QString &langKey,
+                            const QString &apiKey,
+                            const QString &oauthToken,
+                            const QString &googleServiceAccountPath,
+                            const QString &prompt,
+                            const QMap<QString, QPair<QString, QString>> &langMap,
+                            int startPage,
+                            int endPage,
+                            std::atomic<bool> *stopFlag)
+                    : pdfPath_(pdfPath), outputPath_(outputPath), tessPath_(tessPath),
+                        ocrEngine_(ocrEngine), langKey_(langKey), apiKey_(apiKey),
+                        oauthToken_(oauthToken), googleServiceAccountPath_(googleServiceAccountPath), 
+                        prompt_(prompt), langMap_(langMap), startPage_(startPage), endPage_(endPage), stopFlag_(stopFlag) {}
 
 signals:
     void progressChanged(QString, double);
@@ -63,15 +62,20 @@ public slots:
             }
 
             int totalPages = doc.pageCount();
-            int s = 1;
-            int e = totalPages;
+            int s = (startPage_ >= 1) ? startPage_ : 1;
+            int e = (endPage_ >= 1) ? endPage_ : totalPages;
+
+            if (s < 1) s = 1;
+            if (e > totalPages) e = totalPages;
+            if (s > e) {
+                throw std::runtime_error("Invalid page range");
+            }
 
             QStringList images;
             for (int i = s - 1; i < e; ++i) {
                 if (stopFlag_ && stopFlag_->load()) throw std::runtime_error("Process stopped by user.");
                 emit progressChanged(QString("Rendering page %1/%2...").arg(i - (s - 1) + 1).arg(e - (s - 1)), 5);
-                // Use same render logic as OcrProcessor::renderPageToTempPNG
-                // For simplicity call out to a local QPdfDocument render here
+                
                 QSizeF pageSize = doc.pagePointSize(i);
                 const double dpi = 300.0;
                 double scale = dpi / 72.0;
@@ -79,6 +83,7 @@ public slots:
                 int h = static_cast<int>(pageSize.height() * scale);
                 QImage image = doc.render(i, QSize(w, h));
                 if (image.isNull()) throw std::runtime_error("Failed to render PDF page");
+                
                 QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/qt_tess_tmp";
                 QDir().mkpath(tempDir);
                 QString fname = QString("%1/page_%2.png").arg(tempDir).arg(i);
@@ -91,43 +96,72 @@ public slots:
             QStringList ocrResults;
             auto langPair = langMap_.value(langKey_, qMakePair(QString("eng"), QString("en")));
             QString tessLang = langPair.first;
-            QString visionLang = langPair.second;
 
             for (int i = 0; i < images.size(); ++i) {
-                if (stopFlag_ && stopFlag_->load()) throw std::runtime_error("Process stopped by user.");
-                emit progressChanged(QString("OCR page %1/%2...").arg(i + 1).arg(images.size()), 20 + ((i + 1.0) / images.size()) * 30);
+                if (stopFlag_ && stopFlag_->load()) {
+                    // Clean up temp files before stopping
+                    for (const QString &img : images) {
+                        QFile::remove(img);
+                    }
+                    throw std::runtime_error("Process stopped by user.");
+                }
+                
+                emit progressChanged(QString("OCR page %1/%2...").arg(i + 1).arg(images.size()), 
+                                   20 + ((i + 1.0) / images.size()) * 30);
                 QString text;
+                
                 if (ocrEngine_ == "Tesseract") {
-                    // call tesseract directly here
                     tesseract::TessBaseAPI api;
                     const char *datapath = tessPath_.isEmpty() ? nullptr : tessPath_.toUtf8().constData();
                     if (api.Init(datapath, tessLang.toUtf8().constData())) {
+                        // Clean up before throwing
+                        for (const QString &img : images) {
+                            QFile::remove(img);
+                        }
                         throw std::runtime_error("Could not initialize tesseract");
                     }
                     Pix *image = pixRead(images[i].toUtf8().constData());
-                    if (!image) { api.End(); throw std::runtime_error("Failed to read image"); }
-                    api.SetImage(image); api.Recognize(0);
+                    if (!image) { 
+                        api.End(); 
+                        for (const QString &img : images) {
+                            QFile::remove(img);
+                        }
+                        throw std::runtime_error("Failed to read image"); 
+                    }
+                    api.SetImage(image); 
+                    api.Recognize(0);
                     char *out = api.GetUTF8Text();
-                    if (out) { text = QString::fromUtf8(out); delete[] out; }
-                    pixDestroy(&image); api.End();
+                    if (out) { 
+                        text = QString::fromUtf8(out); 
+                        delete[] out; 
+                    }
+                    pixDestroy(&image); 
+                    api.End();
                 } else if (ocrEngine_ == "Google Vision") {
-                    // Simple request: encode image and post to Vision API
-                    QFile f(images[i]); if (!f.open(QIODevice::ReadOnly)) throw std::runtime_error("Failed to open image");
-                    QByteArray bytes = f.readAll(); f.close();
+                    // Google Vision implementation
+                    QFile f(images[i]); 
+                    if (!f.open(QIODevice::ReadOnly)) throw std::runtime_error("Failed to open image");
+                    QByteArray bytes = f.readAll(); 
+                    f.close();
                     QString base64 = QString::fromLatin1(bytes.toBase64());
-                    QJsonObject imageObj; imageObj["content"] = base64;
-                    QJsonObject feature; feature["type"] = "DOCUMENT_TEXT_DETECTION";
-                    QJsonArray features; features.append(feature);
-                    QJsonObject request; request["image"] = imageObj; request["features"] = features;
-                    QJsonArray requests; requests.append(request);
-                    QJsonObject payload; payload["requests"] = requests;
+                    
+                    QJsonObject imageObj; 
+                    imageObj["content"] = base64;
+                    QJsonObject feature; 
+                    feature["type"] = "DOCUMENT_TEXT_DETECTION";
+                    QJsonArray features; 
+                    features.append(feature);
+                    QJsonObject request; 
+                    request["image"] = imageObj; 
+                    request["features"] = features;
+                    QJsonArray requests; 
+                    requests.append(request);
+                    QJsonObject payload; 
+                    payload["requests"] = requests;
 
                     QNetworkAccessManager netman;
                     QNetworkRequest req;
-                    if (!apiKey_.isEmpty()) {
-                        req.setUrl(QUrl(QString("https://vision.googleapis.com/v1/images:annotate?key=%1").arg(apiKey_)));
-                    } else if (!oauthToken_.isEmpty()) {
-                        // Use passed-in OAuth2 access token from service account (main thread obtained)
+                    if (!oauthToken_.isEmpty()) {
                         req.setUrl(QUrl("https://vision.googleapis.com/v1/images:annotate"));
                         req.setRawHeader("Authorization", QString("Bearer %1").arg(oauthToken_).toUtf8());
                     } else {
@@ -135,23 +169,48 @@ public slots:
                     }
                     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
                     QNetworkReply *reply = netman.post(req, QJsonDocument(payload).toJson());
-                    QEventLoop loop; QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit); loop.exec();
-                    if (reply->error() != QNetworkReply::NoError) { QString err = reply->errorString(); reply->deleteLater(); throw std::runtime_error(err.toStdString()); }
-                    QByteArray resp = reply->readAll(); reply->deleteLater(); QJsonDocument doc = QJsonDocument::fromJson(resp);
+                    QEventLoop loop; 
+                    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit); 
+                    loop.exec();
+                    
+                    if (reply->error() != QNetworkReply::NoError) { 
+                        QString err = reply->errorString(); 
+                        reply->deleteLater(); 
+                        for (const QString &img : images) {
+                            QFile::remove(img);
+                        }
+                        throw std::runtime_error(err.toStdString()); 
+                    }
+                    
+                    QByteArray resp = reply->readAll(); 
+                    reply->deleteLater(); 
+                    QJsonDocument doc = QJsonDocument::fromJson(resp);
                     if (!doc.isObject()) throw std::runtime_error("Invalid response from Google Vision.");
-                    QJsonObject root = doc.object(); QJsonArray responses = root["responses"].toArray(); if (responses.isEmpty()) { text = QString(); } else { text = responses[0].toObject()["fullTextAnnotation"].toObject()["text"].toString(); }
+                    
+                    QJsonObject root = doc.object(); 
+                    QJsonArray responses = root["responses"].toArray(); 
+                    if (responses.isEmpty()) { 
+                        text = QString(); 
+                    } else { 
+                        text = responses[0].toObject()["fullTextAnnotation"].toObject()["text"].toString(); 
+                    }
                 }
+                
                 ocrResults << text;
                 QFile::remove(images[i]);
             }
 
             QString joined = ocrResults.join("\n\n");
             QFile outf(outputPath_);
-            if (!outf.open(QIODevice::WriteOnly | QIODevice::Text)) throw std::runtime_error("Failed to open output file for writing.");
-            outf.write(joined.toUtf8()); outf.close();
+            if (!outf.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                throw std::runtime_error("Failed to open output file for writing.");
+            }
+            outf.write(joined.toUtf8()); 
+            outf.close();
 
             emit progressChanged("Done", 100);
             emit finished(outputPath_);
+            
         } catch (const std::exception &ex) {
             emit errorOccurred(QString::fromStdString(ex.what()));
         } catch (...) {
@@ -170,23 +229,21 @@ private:
     QString googleServiceAccountPath_;
     QString prompt_;
     QMap<QString, QPair<QString, QString>> langMap_;
+    int startPage_;
+    int endPage_;
     std::atomic<bool> *stopFlag_;
 };
 
-
-// Helper: base64url encode (no padding, URL-safe)
+// Helper functions
 static QByteArray base64UrlEncode(const QByteArray &input) {
     QByteArray b = input.toBase64(QByteArray::Base64Encoding);
-    // Qt's toBase64 uses +/ and = padding; convert to base64url
     b = b.replace('+', '-').replace('/', '_');
-    // Remove padding
     while (b.endsWith('=')) b.chop(1);
     return b;
 }
 
 #include "OcrProcessor.moc"
 
-// Helper: sign data with RSA private key PEM using EVP (returns binary signature)
 static QByteArray signWithPrivateKey(const QByteArray &privateKeyPem, const QByteArray &data) {
     BIO *bio = BIO_new_mem_buf(privateKeyPem.constData(), privateKeyPem.size());
     if (!bio) return QByteArray();
@@ -250,7 +307,6 @@ OcrProcessor::OcrProcessor(QObject *parent)
       workerThread_(nullptr),
       netman_(new QNetworkAccessManager(this))
 {
-    // Initialize language map
     langMap_ = {
         { "English (eng)", { "eng", "en" } },
         { "Sanskrit – IAST / Devanagari (san)", { "san", "sa" } },
@@ -278,8 +334,13 @@ OcrProcessor::~OcrProcessor() {
         delete pdfDoc_;
     }
     if (workerThread_) {
+        stopFlag_.store(true);
         workerThread_->quit();
-        workerThread_->wait();
+        workerThread_->wait(3000); // Wait up to 3 seconds
+        if (workerThread_->isRunning()) {
+            workerThread_->terminate();
+            workerThread_->wait();
+        }
         delete workerThread_;
     }
 }
@@ -317,7 +378,6 @@ void OcrProcessor::setGoogleServiceAccountPath(const QString &path) {
 }
 
 QString OcrProcessor::getAccessTokenFromServiceAccount(const QString &jsonPath) {
-    // Return cached token if valid
     qint64 now = std::time(nullptr);
     if (!googleAccessToken_.isEmpty() && googleAccessTokenExpiry_ > now + 60) {
         return googleAccessToken_;
@@ -342,7 +402,7 @@ QString OcrProcessor::getAccessTokenFromServiceAccount(const QString &jsonPath) 
     }
 
     qint64 iat = std::time(nullptr);
-    qint64 exp = iat + 3600; // 1 hour
+    qint64 exp = iat + 3600;
 
     QJsonObject header;
     header["alg"] = "RS256";
@@ -369,10 +429,10 @@ QString OcrProcessor::getAccessTokenFromServiceAccount(const QString &jsonPath) 
     QByteArray encodedSig = base64UrlEncode(signature);
     QByteArray signedJwt = unsignedJwt + "." + encodedSig;
 
-    // Exchange JWT for access token
     QNetworkRequest req(QUrl("https://oauth2.googleapis.com/token"));
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
-    QByteArray body = QString("grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=%1").arg(QString::fromUtf8(signedJwt)).toUtf8();
+    QByteArray body = QString("grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=%1")
+        .arg(QString::fromUtf8(signedJwt)).toUtf8();
 
     QNetworkReply *reply = netman_->post(req, body);
     QEventLoop loop;
@@ -421,38 +481,76 @@ void OcrProcessor::setLlmProvider(const QString &provider) {
 }
 
 void OcrProcessor::startProcessing() {
-    // Validation
+    // Validation with proper error messages
     if (pdfPath_.isEmpty()) {
-        emit errorOccurred("No PDF selected.");
+        emit errorOccurred("No PDF file selected. Please choose a PDF document.");
         return;
     }
+    
+    QFileInfo pdfInfo(pdfPath_);
+    if (!pdfInfo.exists() || !pdfInfo.isFile()) {
+        emit errorOccurred(QString("PDF file not found: %1").arg(pdfPath_));
+        return;
+    }
+    
     if (outputPath_.isEmpty()) {
-        emit errorOccurred("No output location selected.");
+        emit errorOccurred("No output location selected. Please choose where to save the results.");
         return;
     }
+    
     if (ocrEngine_.isEmpty()) {
-        emit errorOccurred("Choose OCR engine.");
+        emit errorOccurred("No OCR engine selected. Please choose Tesseract or Google Vision.");
         return;
     }
-    if (ocrEngine_ == "Tesseract" && tessPath_.isEmpty()) {
-        emit errorOccurred("Tesseract path not set.");
-        return;
-    }
-    // If a Tesseract path was provided, ensure it exists and is executable.
-    if (ocrEngine_ == "Tesseract" && !tessPath_.isEmpty()) {
-        QFileInfo fi(tessPath_);
-        if (!fi.exists() || !fi.isFile() || !(fi.permissions() & QFileDevice::ExeUser)) {
-            emit errorOccurred(QString("Tesseract executable not found or not executable: %1").arg(tessPath_));
+    
+    // Tesseract-specific validation
+    if (ocrEngine_ == "Tesseract") {
+        if (tessPath_.isEmpty()) {
+            emit errorOccurred("Tesseract path not set. Please specify the location of the Tesseract executable.");
+            return;
+        }
+        
+        QFileInfo tessInfo(tessPath_);
+        if (!tessInfo.exists()) {
+            emit errorOccurred(QString("Tesseract executable not found at: %1\n\nPlease verify the path is correct.").arg(tessPath_));
+            return;
+        }
+        
+        if (!tessInfo.isFile()) {
+            emit errorOccurred(QString("The specified Tesseract path is not a file: %1").arg(tessPath_));
+            return;
+        }
+        
+        if (!(tessInfo.permissions() & QFileDevice::ExeUser)) {
+            emit errorOccurred(QString("Tesseract executable lacks execute permissions: %1").arg(tessPath_));
             return;
         }
     }
+    
+    // Google Vision validation
+    if (ocrEngine_ == "Google Vision") {
+        if (apiKey_.isEmpty() && googleServiceAccountPath_.isEmpty()) {
+            emit errorOccurred("Google Vision requires either an API key or a service account JSON file.");
+            return;
+        }
+        
+        if (!googleServiceAccountPath_.isEmpty()) {
+            QFileInfo jsonInfo(googleServiceAccountPath_);
+            if (!jsonInfo.exists() || !jsonInfo.isFile()) {
+                emit errorOccurred(QString("Service account JSON file not found: %1").arg(googleServiceAccountPath_));
+                return;
+            }
+        }
+    }
+    
+    // LLM validation
     if (!ocrOnly_) {
         if (apiKey_.isEmpty()) {
-            emit errorOccurred("API key required for LLM processing.");
+            emit errorOccurred("API key required for LLM processing. Either enter an API key or enable 'OCR Only' mode.");
             return;
         }
         if (prompt_.isEmpty()) {
-            emit errorOccurred("Prompt required for LLM processing.");
+            emit errorOccurred("LLM prompt required. Please enter instructions for processing the OCR text.");
             return;
         }
     }
@@ -461,42 +559,52 @@ void OcrProcessor::startProcessing() {
         langKey_ = "English (eng)";
     }
 
+    // Stop any existing worker
+    if (workerThread_ && workerThread_->isRunning()) {
+        stopFlag_.store(true);
+        workerThread_->quit();
+        workerThread_->wait(1000);
+        if (workerThread_->isRunning()) {
+            workerThread_->terminate();
+            workerThread_->wait();
+        }
+    }
+
     stopFlag_.store(false);
 
-    // Create worker thread and worker object. We DO NOT move `this` to the
-    // worker thread because `this` is exposed to QML and must live in the
-    // main GUI thread. Instead create OcrWorker which performs heavy work in
-    // the background and forwards progress/finished/error signals back here.
     if (workerThread_) {
-        workerThread_->quit();
-        workerThread_->wait();
         delete workerThread_;
         workerThread_ = nullptr;
     }
 
     workerThread_ = new QThread();
-    // If using a service account (and no API key), obtain an access token here
+    
     QString oauthToken;
-    if (apiKey_.isEmpty() && !googleServiceAccountPath_.isEmpty()) {
+    if (ocrEngine_ == "Google Vision" && apiKey_.isEmpty() && !googleServiceAccountPath_.isEmpty()) {
         try {
+            emit progressChanged("Obtaining Google Cloud access token...", 1);
             oauthToken = getAccessTokenFromServiceAccount(googleServiceAccountPath_);
         } catch (const std::exception &ex) {
-            emit errorOccurred(QString::fromStdString(ex.what()));
+            emit errorOccurred(QString("Failed to authenticate with Google Cloud: %1").arg(ex.what()));
+            delete workerThread_;
+            workerThread_ = nullptr;
             return;
         } catch (...) {
             emit errorOccurred("Failed to obtain access token from service account.");
+            delete workerThread_;
+            workerThread_ = nullptr;
             return;
         }
     }
 
-    OcrWorker *worker = new OcrWorker(pdfPath_, outputPath_, tessPath_, ocrEngine_, langKey_, apiKey_, oauthToken, googleServiceAccountPath_, prompt_, langMap_, &stopFlag_);
+    OcrWorker *worker = new OcrWorker(pdfPath_, outputPath_, tessPath_, ocrEngine_, langKey_, 
+                                      apiKey_, oauthToken, googleServiceAccountPath_, prompt_, 
+                                      langMap_, startPage_, endPage_, &stopFlag_);
     worker->moveToThread(workerThread_);
 
-    // Forward worker signals to QML by connecting to this object's signals (queued connection)
     connect(worker, &OcrWorker::progressChanged, this, &OcrProcessor::progressChanged, Qt::QueuedConnection);
     connect(worker, &OcrWorker::finished, this, [this, worker](QString out) {
         emit this->finished(out);
-        // stop thread and cleanup
         this->workerThread_->quit();
         worker->deleteLater();
     }, Qt::QueuedConnection);
@@ -507,24 +615,24 @@ void OcrProcessor::startProcessing() {
     }, Qt::QueuedConnection);
 
     connect(workerThread_, &QThread::started, worker, &OcrWorker::process);
-    // Ensure the QThread QObject is deleted when finished
     connect(workerThread_, &QThread::finished, workerThread_, &QObject::deleteLater);
-    // Notify QML / callers when the worker thread has fully stopped
     connect(workerThread_, &QThread::finished, this, [this]() {
         emit stopped();
-        // clear our pointer to indicate idle state
         this->workerThread_ = nullptr;
     });
+    
     workerThread_->start();
 }
 
 void OcrProcessor::stopProcessing() {
-    stopFlag_.store(true);
-    emitProgress("Stopping...", 0);
+    if (workerThread_ && workerThread_->isRunning()) {
+        stopFlag_.store(true);
+        emitProgress("Stopping...", 0);
+    } else {
+        emit stopped();
+    }
 }
 
-
-// Delegate detection to ocr::findTessdataDir() utility to enable unit testing.
 #include "utils.h"
 
 QString OcrProcessor::getTessdataDir() {
@@ -545,7 +653,6 @@ QString OcrProcessor::renderPageToTempPNG(int pageIndex) {
 
     QSizeF pageSize = pdfDoc_->pagePointSize(pageIndex);
     
-    // Render at 300 DPI
     const double dpi = 300.0;
     double scale = dpi / 72.0;
     int w = static_cast<int>(pageSize.width() * scale);
@@ -557,11 +664,9 @@ QString OcrProcessor::renderPageToTempPNG(int pageIndex) {
         throw std::runtime_error("Failed to render PDF page");
     }
 
-    // Create temp directory
     QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/qt_tess_tmp";
     QDir().mkpath(tempDir);
 
-    // Generate deterministic filename
     QByteArray nameHash = QCryptographicHash::hash(
         QString("%1_%2").arg(pdfPath_).arg(pageIndex).toUtf8(),
         QCryptographicHash::Sha1
@@ -578,7 +683,8 @@ QString OcrProcessor::renderPageToTempPNG(int pageIndex) {
     return fname;
 }
 
-QString OcrProcessor::runTesseractOnImage(const QString &imagePath, const QString &tessLang, const QString &tessdataDir) {
+QString OcrProcessor::runTesseractOnImage(const QString &imagePath, const QString &tessLang, 
+                                         const QString &tessdataDir) {
     tesseract::TessBaseAPI api;
     
     const char *datapath = tessdataDir.isEmpty() ? nullptr : tessdataDir.toUtf8().constData();
@@ -614,7 +720,6 @@ QString OcrProcessor::runTesseractOnImage(const QString &imagePath, const QStrin
 }
 
 QString OcrProcessor::runGoogleVisionOnImage(const QString &imagePath, const QString &visionLang) {
-    // Support either API key OR Google service account JSON
     if (apiKey_.isEmpty() && googleServiceAccountPath_.isEmpty()) {
         throw std::runtime_error("Google Vision requires an API key or a service account JSON file.");
     }
@@ -657,7 +762,6 @@ QString OcrProcessor::runGoogleVisionOnImage(const QString &imagePath, const QSt
     if (!apiKey_.isEmpty()) {
         netReq.setUrl(QUrl(QString("https://vision.googleapis.com/v1/images:annotate?key=%1").arg(apiKey_)));
     } else {
-        // Use OAuth2 access token from service account
         QString token = getAccessTokenFromServiceAccount(googleServiceAccountPath_);
         netReq.setUrl(QUrl("https://vision.googleapis.com/v1/images:annotate"));
         netReq.setRawHeader("Authorization", QString("Bearer %1").arg(token).toUtf8());

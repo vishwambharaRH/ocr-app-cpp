@@ -268,10 +268,11 @@ ApplicationWindow {
                         text: "Start Processing"
                         highlighted: true
                         font.bold: true
+                        enabled: true
                         onClicked: {
-                            processor.startProcessing();
                             startButton.enabled = false;
                             stopButton.enabled = true;
+                            processor.startProcessing();
                         }
                     }
 
@@ -281,9 +282,6 @@ ApplicationWindow {
                         enabled: false
                         onClicked: {
                             processor.stopProcessing();
-                            stopButton.enabled = false;
-                            // Immediately re-enable Start so user can retry while worker stops
-                            startButton.enabled = true;
                         }
                     }
                 }
@@ -426,18 +424,6 @@ ApplicationWindow {
 
     Component.onCompleted: {
         // Auto-detect Tesseract on startup
-        var tessPathCandidates = [];
-        
-        if (Qt.platform.os === "windows") {
-            tessPathCandidates = ["C:/Program Files/Tesseract-OCR/tesseract.exe"];
-        } else if (Qt.platform.os === "osx") {
-            tessPathCandidates = ["/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"];
-        } else {
-            tessPathCandidates = ["/usr/bin/tesseract", "/usr/local/bin/tesseract"];
-        }
-        
-        // This would require a helper function in C++ to check file existence
-        // For now, just set a default path hint
         if (Qt.platform.os === "osx") {
             tessPath.placeholderText = "/opt/homebrew/bin/tesseract";
         } else if (Qt.platform.os === "windows") {

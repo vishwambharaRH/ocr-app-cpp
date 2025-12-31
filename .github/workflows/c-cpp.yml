@@ -15,7 +15,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
-    # Force bash shell on Windows so we can reuse the same cmake commands
     defaults:
       run:
         shell: bash
@@ -48,18 +47,16 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.5.0' # Adjust to your needed version
+          version: '6.5.0'
           host: 'windows'
           arch: 'win64_msvc2019_64'
 
       - name: Install Tesseract via vcpkg (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          # vcpkg is pre-installed on GitHub Actions runners
           vcpkg install tesseract:x64-windows
           vcpkg install leptonica:x64-windows
           vcpkg install openssl:x64-windows
-          # Integrate vcpkg with CMake
           echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
           echo "VCPKG_TARGET_TRIPLET=x64-windows" >> $GITHUB_ENV
 
@@ -77,27 +74,22 @@ jobs:
         run: cmake --build build --config Release -- -j$(nproc 2>/dev/null || sysctl -n hw.ncpu || echo 2)
 
       # --- DEPLOYMENT (WINDOWS ONLY) ---
-      # Windows exes need DLLs next to them to run. 
-      # windeployqt fixes Qt DLLs. We manually copy Tesseract DLLs.
       - name: Deploy Qt/Deps (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          # 1. Find windeployqt in Qt installation
           WINDEPLOYQT=$(find /c/Users/runneradmin/AppData/Local/Qt -name "windeployqt.exe" 2>/dev/null | head -n 1)
           if [ -z "$WINDEPLOYQT" ]; then
             echo "::warning::windeployqt not found; skipping Qt deployment"
             WINDEPLOYQT=windeployqt
           fi
           
-          # 2. Run windeployqt to copy Qt DLLs to the build folder
           "$WINDEPLOYQT" --release build/Release/*.exe || echo "::warning::windeployqt deployment may have issues"
           
-          # 3. Copy Tesseract/Leptonica DLLs from vcpkg to build folder
           if [ -d "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin" ]; then
             cp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/"*.dll build/Release/ 2>/dev/null || true
           fi
 
-      # --- LINTING (Skip on Windows to save time/complexity with MSVC headers) ---
+      # --- LINTING (Skip on Windows) ---
       - name: Run Clang-Tidy
         if: matrix.os != 'windows-latest' 
         run: |
@@ -112,15 +104,14 @@ jobs:
       # --- TESTING ---
       - name: Run Unit Tests
         run: |
-          if [ -d "tests" ] || [ -f "build/test_utils" ] || [ -f "build/Release/test_utils.exe" ]; then
-            cd build
-            # On Windows, CTest needs the PATH to include the DLLs we just copied
-            if [ "${{ matrix.os }}" == "windows-latest" ]; then
-              export PATH=$PATH:$(pwd)/Release
-              ctest -C Release --output-on-failure --verbose || true
-            else
-              ctest --output-on-failure --verbose || true
-            fi
+          cd build
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            # Windows: add DLL path and run CTest in Release config
+            export PATH=$PATH:$(pwd)/Release
+            ctest -C Release --output-on-failure --verbose
+          else
+            # Linux/macOS: run CTest normally
+            ctest --output-on-failure --verbose
           fi
 
       # --- PACKAGING ---
@@ -135,7 +126,6 @@ jobs:
               echo "::warning::No .app bundle found to package"
             fi
           elif [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Windows: Zip the Release folder which now contains Exe + DLLs
             if [ -d "build/Release" ]; then
               cd build
               7z a ../packaged/QtQuickTessApp-windows.zip Release/
@@ -143,7 +133,6 @@ jobs:
               echo "::warning::No Release folder found to package"
             fi
           else
-            # Linux: tar the executable if found
             EXECUTABLE=$(find build -maxdepth 1 -type f -executable -not -name "cmake" -not -name "test_utils" 2>/dev/null | head -n 1)
             if [ -n "$EXECUTABLE" ]; then
               tar -czf "packaged/QtQuickTessApp-linux.tar.gz" -C build $(basename "$EXECUTABLE")
