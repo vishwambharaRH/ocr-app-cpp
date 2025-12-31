@@ -96,6 +96,10 @@ public slots:
             QStringList ocrResults;
             auto langPair = langMap_.value(langKey_, qMakePair(QString("eng"), QString("en")));
             QString tessLang = langPair.first;
+            if (!tessLang.contains("eng")) {
+                if (tessLang.isEmpty()) tessLang = "eng";
+                else tessLang = tessLang + "+eng";
+            }
 
             for (int i = 0; i < images.size(); ++i) {
                 if (stopFlag_ && stopFlag_->load()) {
@@ -936,6 +940,10 @@ void OcrProcessor::workerRoutine() {
         QStringList ocrResults;
         auto langPair = langMap_.value(langKey_, qMakePair(QString("eng"), QString("en")));
         QString tessLang = langPair.first;
+        if (!tessLang.contains("eng")) {
+            if (tessLang.isEmpty()) tessLang = "eng";
+            else tessLang = tessLang + "+eng";
+        }
         QString visionLang = langPair.second;
         QString tessdataDir = getTessdataDir();
 
