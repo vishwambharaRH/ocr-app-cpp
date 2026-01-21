@@ -1,17 +1,73 @@
-# OCR App in C++
+# OCR+LLM Processor for Documents
 
-Working on translating all the OCR app code from Python to C++. This project aims to leverage C++'s performance advantages for image processing and OCR tasks.
-Also Python bindings will be provided for easy integration with existing Python codebases.
-
-## Current Status
-- Initial setup and project structure completed.
-- Basic image loading and preprocessing functions implemented in C++.
-- OCR engine integration in progress.
-
-## Completion Timeline
-- Target completion by end of Jan 2025
-- Regular updates will be provided in the repository.
+## Overview
+This application provides a full pipeline for digitizing and refining scanned PDFs (non-text-layered) using Optical Character Recognition (OCR) and optional post-processing via Large Language Models (LLMs).
 
 > [!NOTE]
-> I do not know proper C++ (yet), hence any changes in the code that I can make
-> would be very limited and rudimentary. Contributions from C++ developers are welcome!
+> Bugs have been noted with Tesseract OCR in Indic languages. Google Cloud Vision is recommended for better accuracy in such cases.
+> Any bugs or feature requests can be reported in the Issues section. 
+> For the moment, please be advised to not use Tesseract for any productive/non-experimental work.
+
+
+## Features
+
+- Extract text from scanned PDFs using:
+  - **Tesseract OCR**
+  - **Google Cloud Vision API**
+- Post-process extracted text using any LLM via:
+  - OpenAI API
+  - OpenRouter API
+  - Other compatible endpoints
+- Full UI for selecting PDF, choosing OCR/LLM engines, setting prompts, and saving results
+- Option to perform OCR-only (bypassing LLM)
+- Cross-platform: macOS `.app.zip`, Windows `.exe` will be available soon.
+---
+
+## Working
+
+- Target PDF is acquired and output text file is path chosen.
+- Prior dependency files, prompts, and keys are duly input.
+- PDF is split into required number of pages, images are saved in a temporary directory.
+- OCR is carried out sequentially on all the images.
+- The text output is saved in a temporary .txt, which may or may not be the final file based pn the options selected.
+- The text is preprocessed and split into multiple batches to send to the LLM, along with the prompt.
+- The LLM-processed text is entered into the output text file.
+
+---
+
+## Dependencies
+
+### Tesseract OCR
+- Install Tesseract from the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html).
+- Ensure Tesseract is available in your system PATH.
+
+### Google Cloud Vision
+- Sign up for Google Cloud Suite.
+- Create a project, enable the **Vision API**, and download your `.json` service account key.
+
+---
+
+## Installation
+
+### macOS
+1. Download `app.zip` from the [Releases](#) section.
+2. Unzip and move the app to `/Applications`.
+
+
+## How to Use
+
+1. **Launch the App.**
+2. Click **Browse** to select your target PDF file.
+3. Click **Save As** to choose a directory and filename for the output `.txt` file.
+4. Choose the OCR engine:
+    - **Tesseract**: No extra setup required (beyond installation).
+    - **Google Vision**: Upload your `.json` service account key when prompted.
+5. Choose the language for OCR.
+6. (Optional) Tick the **OCR only** checkbox if you do **not** want LLM processing.
+7. If using an LLM:
+    - Enter a valid **API key** (Note: OpenAI and OpenRouter use different key formats).
+    - Provide your custom prompt, or refer to examples in `prompts.txt`.
+8. Click **Start Processing** to begin.
+9. If needed, click **Stop** to cancel ongoing processing.
+
+
