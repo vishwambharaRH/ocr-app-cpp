@@ -8,6 +8,7 @@ This application provides a full pipeline for digitizing and refining scanned PD
 > Any bugs or feature requests can be reported in the Issues section. 
 > For the moment, please be advised to not use Tesseract for any productive/non-experimental work.
 
+A paper can be found on this work at [ResearchGate](https://www.researchgate.net/publication/399914114_Dual-Stage_OCR_Correction_for_Classical_Languages_using_LLMs_A_Comparative_Evaluation/stats)
 
 ## Features
 
