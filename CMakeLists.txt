@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.22)
 project(OCRLLMProcessor VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
@@ -7,6 +7,11 @@ set(CMAKE_AUTOUIC ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Windows-specific: Use MSVC runtime library dynamically
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+endif()
 
 # Build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -28,31 +33,40 @@ if(NOT DEFINED TESSDATA_DIR)
     set(TESSDATA_DIR "")
 endif()
 
-# Find Qt6 components
-find_package(Qt6 REQUIRED COMPONENTS
+# Find Qt6 components with explicit CMAKE_PREFIX_PATH for Windows
+# On Windows with Qt Creator, set: -DCMAKE_PREFIX_PATH=C:\Qt\6.11.0\msvc2022_64
+find_package(Qt6 COMPONENTS
     Core
     Gui
     Quick
     Widgets
     Network
     Pdf
+    REQUIRED
 )
 
-# Find Tesseract and Leptonica
+# Find Tesseract and Leptonica with Windows-friendly paths
+# Windows users should install tesseract-ocr from: https://github.com/UB-Mannheim/tesseract/wiki
 find_path(LEPT_HEADERS leptonica/allheaders.h
     HINTS
         /usr/include
         /usr/local/include
         /opt/homebrew/include
         "C:/Program Files/Tesseract-OCR/include"
+        "C:/Program Files (x86)/Tesseract-OCR/include"
+        "$ENV{PROGRAMFILES}/Tesseract-OCR/include"
+    PATH_SUFFIXES include
 )
 
-find_library(LEPT_LIB leptonica
+find_library(LEPT_LIB leptonica lept
     HINTS
         /usr/lib
         /usr/local/lib
         /opt/homebrew/lib
         "C:/Program Files/Tesseract-OCR/lib"
+        "C:/Program Files (x86)/Tesseract-OCR/lib"
+        "$ENV{PROGRAMFILES}/Tesseract-OCR/lib"
+    PATH_SUFFIXES lib
 )
 
 find_path(TESS_HEADERS tesseract/baseapi.h
@@ -61,23 +75,29 @@ find_path(TESS_HEADERS tesseract/baseapi.h
         /usr/local/include
         /opt/homebrew/include
         "C:/Program Files/Tesseract-OCR/include"
+        "C:/Program Files (x86)/Tesseract-OCR/include"
+        "$ENV{PROGRAMFILES}/Tesseract-OCR/include"
+    PATH_SUFFIXES include
 )
 
-find_library(TESS_LIB tesseract
+find_library(TESS_LIB tesseract tesseract-main
     HINTS
         /usr/lib
         /usr/local/lib
         /opt/homebrew/lib
         "C:/Program Files/Tesseract-OCR/lib"
+        "C:/Program Files (x86)/Tesseract-OCR/lib"
+        "$ENV{PROGRAMFILES}/Tesseract-OCR/lib"
+    PATH_SUFFIXES lib
 )
 
 if(NOT LEPT_HEADERS OR NOT LEPT_LIB OR NOT TESS_HEADERS OR NOT TESS_LIB)
     message(FATAL_ERROR 
         "Tesseract/Leptonica development packages not found.\n"
-        "Please install them:\n"
-        "  Ubuntu/Debian: sudo apt-get install libtesseract-dev libleptonica-dev\n"
-        "  macOS: brew install tesseract leptonica\n"
-        "  Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki"
+        "Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki\n"
+        "    Then set -DTESSDATA_DIR=<path>/tessdata during CMake configuration\n"
+        "macOS: brew install tesseract leptonica\n"
+        "Linux: sudo apt-get install libtesseract-dev libleptonica-dev"
     )
 endif()
 
@@ -202,9 +222,9 @@ if(APPLE)
     endif()
 endif()
 
-# Windows executable properties
+# Windows executable properties - creates GUI app without console window
 if(WIN32)
-    set_target_properties(QtQuickTessApp PROPERTIES
+    set_target_properties(OCRLLMProcessor PROPERTIES
         WIN32_EXECUTABLE TRUE
     )
 endif()
