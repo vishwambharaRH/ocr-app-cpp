@@ -129,11 +129,20 @@ set(HEADERS
 list(APPEND SOURCES src/utils.cpp)
 list(APPEND HEADERS src/utils.h)
 
+# Icon and resource handling for different platforms
+
 # macOS bundle icon
-set(ICON_FILE ${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.icns)
-if(EXISTS ${ICON_FILE})
-    set_source_files_properties(${ICON_FILE} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
-    list(APPEND SOURCES ${ICON_FILE})
+set(MACOS_ICON_FILE ${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.icns)
+if(APPLE AND EXISTS ${MACOS_ICON_FILE})
+    set_source_files_properties(${MACOS_ICON_FILE} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    list(APPEND SOURCES ${MACOS_ICON_FILE})
+endif()
+
+# Windows resource file with embedded icon
+set(WINDOWS_RC_FILE ${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc)
+if(WIN32 AND EXISTS ${WINDOWS_RC_FILE})
+    list(APPEND SOURCES ${WINDOWS_RC_FILE})
+    message(STATUS "Added Windows resource file for icon embedding")
 endif()
 
 # Create executable

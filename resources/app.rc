@@ -1,0 +1,32 @@
+// Windows Resource File for OCRLLMProcessor
+// This embeds the application icon into the Windows executable
+#include <windows.h>
+
+// IDI_ICON1 is the standard icon resource used by Qt
+IDI_ICON1 ICON "icons/app.ico"
+
+// Version information for Windows File Properties
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ MASK 0x3f
+ FLAGS 0x0
+ BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "OCR App"
+            VALUE "FileDescription", "OCR + LLM Document Processor"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "OCRLLMProcessor"
+            VALUE "OriginalFilename", "OCRLLMProcessor.exe"
+            VALUE "ProductName", "OCRLLMProcessor"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+ END
