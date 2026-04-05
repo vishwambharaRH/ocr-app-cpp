@@ -33,8 +33,23 @@ if(NOT DEFINED TESSDATA_DIR)
     set(TESSDATA_DIR "")
 endif()
 
-# Find Qt6 components with explicit CMAKE_PREFIX_PATH for Windows
-# On Windows with Qt Creator, set: -DCMAKE_PREFIX_PATH=C:\Qt\6.11.0\msvc2022_64
+# For cross-compilation to Windows, Qt6 needs to be pre-installed or skipped
+# Check if we're cross-compiling to Windows
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    message(STATUS "Cross-compiling to Windows...")
+    # For Docker cross-compilation builds
+    # Tesseract and Leptonica are optional
+    set(OPTIONAL_LIBS OFF)
+else()
+    set(OPTIONAL_LIBS ON)
+endif()
+
+# Find Qt6 components
+if(NOT DEFINED Qt6_DIR AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    # Help find Qt6 on native Windows/macOS/Linux builds
+    message(STATUS "Searching for Qt6...")
+endif()
+
 find_package(Qt6 COMPONENTS
     Core
     Gui
@@ -45,17 +60,19 @@ find_package(Qt6 COMPONENTS
     REQUIRED
 )
 
-# Find Tesseract and Leptonica with Windows-friendly paths
+# Try to find Tesseract and Leptonica (optional for cross-compilation)
 # Windows users should install tesseract-ocr from: https://github.com/UB-Mannheim/tesseract/wiki
 find_path(LEPT_HEADERS leptonica/allheaders.h
     HINTS
         /usr/include
         /usr/local/include
         /opt/homebrew/include
+        /opt/mingw-libs/mingw/include
         "C:/Program Files/Tesseract-OCR/include"
         "C:/Program Files (x86)/Tesseract-OCR/include"
         "$ENV{PROGRAMFILES}/Tesseract-OCR/include"
     PATH_SUFFIXES include
+    NO_DEFAULT_PATH
 )
 
 find_library(LEPT_LIB leptonica lept
@@ -63,10 +80,12 @@ find_library(LEPT_LIB leptonica lept
         /usr/lib
         /usr/local/lib
         /opt/homebrew/lib
+        /opt/mingw-libs/mingw/lib
         "C:/Program Files/Tesseract-OCR/lib"
         "C:/Program Files (x86)/Tesseract-OCR/lib"
         "$ENV{PROGRAMFILES}/Tesseract-OCR/lib"
     PATH_SUFFIXES lib
+    NO_DEFAULT_PATH
 )
 
 find_path(TESS_HEADERS tesseract/baseapi.h
@@ -74,10 +93,12 @@ find_path(TESS_HEADERS tesseract/baseapi.h
         /usr/include
         /usr/local/include
         /opt/homebrew/include
+        /opt/mingw-libs/mingw/include
         "C:/Program Files/Tesseract-OCR/include"
         "C:/Program Files (x86)/Tesseract-OCR/include"
         "$ENV{PROGRAMFILES}/Tesseract-OCR/include"
     PATH_SUFFIXES include
+    NO_DEFAULT_PATH
 )
 
 find_library(TESS_LIB tesseract tesseract-main
@@ -85,20 +106,31 @@ find_library(TESS_LIB tesseract tesseract-main
         /usr/lib
         /usr/local/lib
         /opt/homebrew/lib
+        /opt/mingw-libs/mingw/lib
         "C:/Program Files/Tesseract-OCR/lib"
         "C:/Program Files (x86)/Tesseract-OCR/lib"
         "$ENV{PROGRAMFILES}/Tesseract-OCR/lib"
     PATH_SUFFIXES lib
+    NO_DEFAULT_PATH
 )
 
-if(NOT LEPT_HEADERS OR NOT LEPT_LIB OR NOT TESS_HEADERS OR NOT TESS_LIB)
-    message(FATAL_ERROR 
-        "Tesseract/Leptonica development packages not found.\n"
-        "Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki\n"
-        "    Then set -DTESSDATA_DIR=<path>/tessdata during CMake configuration\n"
-        "macOS: brew install tesseract leptonica\n"
-        "Linux: sudo apt-get install libtesseract-dev libleptonica-dev"
-    )
+# Set Tesseract/Leptonica availability flag
+if(LEPT_HEADERS AND LEPT_LIB AND TESS_HEADERS AND TESS_LIB)
+    set(HAVE_TESSERACT TRUE)
+    message(STATUS "Tesseract/Leptonica found - OCR support enabled")
+else()
+    set(HAVE_TESSERACT FALSE)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        message(WARNING 
+            "Tesseract/Leptonica development packages not found.\n"
+            "Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki\n"
+            "macOS: brew install tesseract leptonica\n"
+            "Linux: sudo apt-get install libtesseract-dev libleptonica-dev\n"
+            "Building without OCR support..."
+        )
+    else()
+        message(STATUS "Cross-compiling to Windows - OCR support disabled (optional)")
+    endif()
 endif()
 
 message(STATUS "Found Leptonica headers: ${LEPT_HEADERS}")
@@ -106,11 +138,17 @@ message(STATUS "Found Leptonica library: ${LEPT_LIB}")
 message(STATUS "Found Tesseract headers: ${TESS_HEADERS}")
 message(STATUS "Found Tesseract library: ${TESS_LIB}")
 
+# Include directories - only add Tesseract if found
 include_directories(
-    ${LEPT_HEADERS}
-    ${TESS_HEADERS}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+if(HAVE_TESSERACT)
+    include_directories(
+        ${LEPT_HEADERS}
+        ${TESS_HEADERS}
+    )
+endif()
 
 # OpenSSL is required to sign JWT assertions for Google service-account auth
 find_package(OpenSSL REQUIRED)
@@ -167,10 +205,19 @@ target_link_libraries(OCRLLMProcessor PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::Pdf
-    ${TESS_LIB}
-    ${LEPT_LIB}
     OpenSSL::Crypto
 )
+
+# Conditionally link Tesseract if available
+if(HAVE_TESSERACT)
+    target_link_libraries(OCRLLMProcessor PRIVATE
+        ${TESS_LIB}
+        ${LEPT_LIB}
+    )
+    target_compile_definitions(OCRLLMProcessor PRIVATE HAVE_TESSERACT=1)
+else()
+    target_compile_definitions(OCRLLMProcessor PRIVATE HAVE_TESSERACT=0)
+endif()
 
 # ------------------ Unit tests (GoogleTest) ------------------
 include(CTest)
